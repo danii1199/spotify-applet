@@ -3,12 +3,13 @@
 Controla Spotify desde el panel de Cinnamon (Linux Mint).
 
 - Icono en el panel; al pasar el ratón, vista previa con portada, canción y **todos** los artistas.
-- Menú con portada, barra de progreso que se puede arrastrar, aleatorio, anterior/pausa/siguiente, repetir (no / lista / canción).
+- Menú con portada, aleatorio, anterior/pausa/siguiente, repetir (no / lista / canción).
+- Barra de progreso animada con 6 diseños a elegir en *Configurar*: líquida, clásica de Spotify, onda de sonido, neón, cuentas y ecualizador. Clic o arrastrar para saltar, rueda = ±5 s.
 - Volumen propio de Spotify (independiente del del sistema). Rueda del ratón sobre el icono = volumen, clic central = pausa.
 - Buscar en Spotify o pegar un enlace `open.spotify.com` para reproducirlo.
 - Copiar enlace de la canción, mostrar / cerrar Spotify.
 - Textos largos se desplazan solos.
-- Con tu cuenta conectada: **Me gusta** y **añadir / quitar la canción de tus listas**.
+- Con tu cuenta conectada: corazón de **Me gusta** junto al título y **añadir / quitar la canción de tus listas**.
 
 ## Instalar
 
@@ -39,7 +40,7 @@ La sesión se guarda en `~/.config/spotify-applet/token.json` (no está en el re
 |---|---|
 | `spotify-applet/applet.js` | La miniaplicación (control por MPRIS/D-Bus, vista previa, menú) |
 | `spotify-applet/spotify-lists.py` | Ayudante de la Web API: login PKCE, listas, Me gusta |
-| `spotify-applet/settings-schema.json` | Opciones (tamaños de portada, Client ID) |
+| `spotify-applet/settings-schema.json` | Opciones (tamaños de portada, estilo de barra, Client ID) |
 | `spotify-applet/stylesheet.css` | Estilos |
 | `install.sh` | Instalar / actualizar / desinstalar |
 

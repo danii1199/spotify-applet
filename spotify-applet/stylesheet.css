@@ -16,3 +16,5 @@
 .spotify-preview .spotify-album { color: #b3b3b3; }
 .spotify-preview .spotify-artist { color: #e0e0e0; }
 .spotify-preview-cover { border-radius: 6px; }
+.spotify-heart { padding: 4px; border-radius: 99px; }
+.spotify-heart:hover { background-color: rgba(128,128,128,0.18); }

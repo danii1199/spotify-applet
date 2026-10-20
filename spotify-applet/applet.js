@@ -18,6 +18,7 @@ const PATH = '/org/mpris/MediaPlayer2';
 const IFACE_ROOT = 'org.mpris.MediaPlayer2';
 const IFACE_PLAYER = 'org.mpris.MediaPlayer2.Player';
 const IFACE_PROPS = 'org.freedesktop.DBus.Properties';
+const HEART_SPACE = 34;
 const CACHE_DIR = GLib.get_user_cache_dir() + '/spotify-applet';
 let HELPER = null; // set from metadata.path in main()
 
@@ -172,6 +173,357 @@ class WaveSeeker {
 }
 Signals.addSignalMethods(WaveSeeker.prototype);
 
+// Rounded "liquid" bar: grows on hover, green gradient fill with a shine that
+// travels along the played part, and a pulsing glowing tip.
+class LiquidSeeker extends WaveSeeker {
+    constructor(width) {
+        super(width);
+        this.actor.height = 30;
+        this._hoverAmt = 0;
+    }
+
+    setSeed() {
+        this.actor.queue_repaint();
+    }
+
+    _repaint(area) {
+        let cr = area.get_context();
+        let [w, h] = area.get_surface_size();
+        stepHover(this);
+        let pad = 9;
+        let thick = 5 + 4 * this._hoverAmt;
+        let x0 = pad, x1 = w - pad, cy = h / 2;
+        let playX = x0 + this.value * (x1 - x0);
+        let r = thick / 2;
+        let pill = (a, b) => {
+            if (b - a < thick) b = a + thick;
+            cr.newPath();
+            cr.arc(a + r, cy, r, Math.PI / 2, 3 * Math.PI / 2);
+            cr.arc(b - r, cy, r, -Math.PI / 2, Math.PI / 2);
+            cr.closePath();
+        };
+
+        // track
+        pill(x0, x1);
+        cr.setSourceRGBA(0.55, 0.55, 0.55, 0.28);
+        cr.fill();
+
+        // hover ghost
+        if (this._hoverX >= 0 && !this._dragging) {
+            let hx = Math.max(x0, Math.min(x1, this._hoverX));
+            if (hx > playX) {
+                pill(x0, hx);
+                cr.setSourceRGBA(0.114, 0.725, 0.329, 0.25);
+                cr.fill();
+            }
+        }
+
+        // played part: gradient + travelling shine
+        if (playX > x0) {
+            let g = new Cairo.LinearGradient(x0, 0, playX, 0);
+            g.addColorStopRGBA(0, 0.07, 0.55, 0.25, 1);
+            g.addColorStopRGBA(1, 0.12, 0.84, 0.38, 1);
+            pill(x0, playX);
+            cr.setSource(g);
+            cr.fill();
+            if (this.playing) {
+                let span = Math.max(1, playX - x0);
+                let sx = x0 + ((this._t * 70) % (span + 60)) - 30;
+                let sh = new Cairo.LinearGradient(sx - 30, 0, sx + 30, 0);
+                sh.addColorStopRGBA(0, 1, 1, 1, 0);
+                sh.addColorStopRGBA(0.5, 1, 1, 1, 0.45);
+                sh.addColorStopRGBA(1, 1, 1, 1, 0);
+                pill(x0, playX);
+                cr.setSource(sh);
+                cr.fill();
+            }
+        }
+
+        // glowing tip
+        let pulse = this.playing ? 0.5 + 0.5 * Math.sin(this._t * 4) : 0.3;
+        let glowR = 9 + 3 * pulse + 2 * this._hoverAmt;
+        let rg = new Cairo.RadialGradient(playX, cy, 0, playX, cy, glowR);
+        rg.addColorStopRGBA(0, 0.12, 0.84, 0.38, 0.55);
+        rg.addColorStopRGBA(1, 0.12, 0.84, 0.38, 0);
+        cr.setSource(rg);
+        cr.arc(playX, cy, glowR, 0, 2 * Math.PI);
+        cr.fill();
+        cr.setSourceRGBA(1, 1, 1, 1);
+        cr.arc(playX, cy, 3.5 + 2.5 * this._hoverAmt, 0, 2 * Math.PI);
+        cr.fill();
+        cr.$dispose();
+    }
+
+    _xToValue(event) {
+        let [x] = event.get_coords();
+        let [ax] = this.actor.get_transformed_position();
+        let pad = 9;
+        return Math.max(0, Math.min(1, (x - ax - pad) / (this.actor.width - 2 * pad)));
+    }
+}
+
+// Helpers shared by the padded designs below
+function stepHover(seek) {
+    let target = (seek._hoverX >= 0 || seek._dragging) ? 1 : 0;
+    seek._hoverAmt += (target - seek._hoverAmt) * 0.35;
+    if (Math.abs(target - seek._hoverAmt) > 0.01) seek.actor.queue_repaint();
+}
+
+function hsv(h, s, v) {
+    let f = n => {
+        let k = (n + h * 6) % 6;
+        return v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+    };
+    return [f(5), f(3), f(1)];
+}
+
+// Spotify's own look: thin bar, white fill that turns green with a knob on hover
+class ClassicSeeker extends LiquidSeeker {
+    constructor(width) {
+        super(width);
+        this.actor.height = 24;
+    }
+
+    _repaint(area) {
+        let cr = area.get_context();
+        let [w, h] = area.get_surface_size();
+        stepHover(this);
+        let pad = 9, x0 = pad, x1 = w - pad, cy = h / 2;
+        let playX = x0 + this.value * (x1 - x0);
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        cr.setLineWidth(4);
+        cr.setSourceRGBA(0.55, 0.55, 0.55, 0.35);
+        cr.moveTo(x0, cy); cr.lineTo(x1, cy); cr.stroke();
+        if (playX > x0) {
+            let a = this._hoverAmt;
+            cr.setSourceRGBA(1 - a * 0.886, 1 - a * 0.275, 1 - a * 0.671, 1);
+            cr.moveTo(x0, cy); cr.lineTo(playX, cy); cr.stroke();
+        }
+        if (this._hoverAmt > 0.05) {
+            cr.setSourceRGBA(1, 1, 1, this._hoverAmt);
+            cr.arc(playX, cy, 6 * this._hoverAmt, 0, 2 * Math.PI);
+            cr.fill();
+        }
+        cr.$dispose();
+    }
+}
+
+// Thin neon line with a colour-shifting glow and a spark at the tip
+class NeonSeeker extends LiquidSeeker {
+    constructor(width) {
+        super(width);
+        this.actor.height = 28;
+    }
+
+    _repaint(area) {
+        let cr = area.get_context();
+        let [w, h] = area.get_surface_size();
+        stepHover(this);
+        let pad = 9, x0 = pad, x1 = w - pad, cy = h / 2;
+        let playX = x0 + this.value * (x1 - x0);
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        cr.setLineWidth(2);
+        cr.setSourceRGBA(0.55, 0.55, 0.55, 0.3);
+        cr.moveTo(x0, cy); cr.lineTo(x1, cy); cr.stroke();
+        if (playX > x0) {
+            let hue = (this._t * 0.08) % 1;
+            let g = new Cairo.LinearGradient(x0, 0, playX, 0);
+            let [r1, g1, b1] = hsv(hue, 0.85, 1);
+            let [r2, g2, b2] = hsv((hue + 0.3) % 1, 0.85, 1);
+            g.addColorStopRGBA(0, r1, g1, b1, 1);
+            g.addColorStopRGBA(1, r2, g2, b2, 1);
+            // glow layers, widest and faintest first
+            for (let [lw, alpha] of [[12, 0.08], [8, 0.12], [5, 0.25], [2.5 + this._hoverAmt, 1]]) {
+                cr.pushGroup();
+                cr.setSource(g);
+                cr.setLineWidth(lw);
+                cr.moveTo(x0, cy); cr.lineTo(playX, cy); cr.stroke();
+                cr.popGroupToSource();
+                cr.paintWithAlpha(alpha);
+            }
+            let flick = this.playing ? 0.7 + 0.3 * Math.sin(this._t * 13) : 0.6;
+            let rg = new Cairo.RadialGradient(playX, cy, 0, playX, cy, 10);
+            rg.addColorStopRGBA(0, 1, 1, 1, flick);
+            rg.addColorStopRGBA(0.3, r2, g2, b2, 0.6 * flick);
+            rg.addColorStopRGBA(1, r2, g2, b2, 0);
+            cr.setSource(rg);
+            cr.arc(playX, cy, 10, 0, 2 * Math.PI);
+            cr.fill();
+        }
+        cr.$dispose();
+    }
+}
+
+// A row of beads that ripple while playing; the current bead pulses
+class DotsSeeker extends LiquidSeeker {
+    constructor(width) {
+        super(width);
+        this.actor.height = 26;
+    }
+
+    _repaint(area) {
+        let cr = area.get_context();
+        let [w, h] = area.get_surface_size();
+        stepHover(this);
+        let pad = 9, x0 = pad, x1 = w - pad, cy = h / 2;
+        let step = 9;
+        let n = Math.max(2, Math.floor((x1 - x0) / step) + 1);
+        let gap = (x1 - x0) / (n - 1);
+        let cur = Math.round(this.value * (n - 1));
+        let hoverI = this._hoverX >= 0 ? Math.round((this._hoverX - x0) / gap) : -1;
+        for (let i = 0; i < n; i++) {
+            let x = x0 + i * gap;
+            let y = cy + (this.playing && i <= cur ? 2.2 * Math.sin(this._t * 5 - i * 0.45) : 0);
+            let r = 2.4;
+            if (i === cur) {
+                r = 4 + (this.playing ? 1.2 * (0.5 + 0.5 * Math.sin(this._t * 6)) : 0) + this._hoverAmt;
+                cr.setSourceRGBA(1, 1, 1, 1);
+            } else if (i < cur) {
+                cr.setSourceRGBA(0.114, 0.725, 0.329, 1);
+            } else if (hoverI >= 0 && i <= hoverI) {
+                cr.setSourceRGBA(0.114, 0.725, 0.329, 0.4);
+            } else {
+                cr.setSourceRGBA(0.6, 0.6, 0.6, 0.35);
+            }
+            cr.arc(x, y, r, 0, 2 * Math.PI);
+            cr.fill();
+        }
+        cr.$dispose();
+    }
+}
+
+// Bouncing spectrum analyser, bars grow from the bottom with peak caps
+class EqualizerSeeker extends WaveSeeker {
+    constructor(width) {
+        super(width);
+        this.actor.height = 40;
+        this._levels = [];
+        this._peaks = [];
+    }
+
+    _repaint(area) {
+        let cr = area.get_context();
+        let [w, h] = area.get_surface_size();
+        let barW = 4, step = 6;
+        let n = Math.floor((w + step - barW) / step);
+        let offset = (w - ((n - 1) * step + barW)) / 2;
+        let playX = this.value * w;
+        for (let i = 0; i < n; i++) {
+            let base = this._heights[i % this._heights.length];
+            let target = this.playing
+                ? base * (0.35 + 0.65 * Math.abs(Math.sin(this._t * (2.5 + base * 4) + i * 1.7)))
+                : base * 0.3;
+            let lv = this._levels[i] === undefined ? target : this._levels[i];
+            lv += (target - lv) * 0.3;
+            this._levels[i] = lv;
+            let pk = Math.max(lv, (this._peaks[i] || 0) - 0.015);
+            this._peaks[i] = pk;
+            let x = offset + i * step;
+            let bh = Math.max(2, lv * (h - 6));
+            let played = x + barW / 2 <= playX;
+            let hovered = !played && this._hoverX >= 0 && x <= this._hoverX;
+            if (played) {
+                let g = new Cairo.LinearGradient(0, h, 0, h - bh);
+                g.addColorStopRGBA(0, 0.07, 0.55, 0.25, 1);
+                g.addColorStopRGBA(1, 0.3, 0.95, 0.5, 1);
+                cr.setSource(g);
+            } else if (hovered) {
+                cr.setSourceRGBA(0.114, 0.725, 0.329, 0.4);
+            } else {
+                cr.setSourceRGBA(0.6, 0.6, 0.6, 0.3);
+            }
+            cr.rectangle(x, h - bh, barW, bh);
+            cr.fill();
+            cr.setSourceRGBA(1, 1, 1, played ? 0.9 : 0.35);
+            cr.rectangle(x, h - pk * (h - 6) - 4, barW, 2);
+            cr.fill();
+        }
+        cr.$dispose();
+    }
+}
+
+const SEEKERS = {
+    liquid: LiquidSeeker,
+    classic: ClassicSeeker,
+    wave: WaveSeeker,
+    neon: NeonSeeker,
+    dots: DotsSeeker,
+    equalizer: EqualizerSeeker,
+};
+
+// Spotify-style heart: green and filled when the track is in Liked Songs
+class HeartButton {
+    constructor() {
+        this.state = false;
+        this._sensitive = true;
+        this._hover = false;
+        this._area = new St.DrawingArea({ width: 24, height: 24 });
+        this.actor = new St.Button({ style_class: 'spotify-heart', can_focus: false, reactive: true });
+        this.actor.set_child(this._area);
+        this.actor.set_pivot_point(0.5, 0.5);
+        this._tooltip = new Tooltips.Tooltip(this.actor, '');
+        this._area.connect('repaint', a => this._repaint(a));
+        this.actor.connect('enter-event', () => { this._hover = true; this._area.queue_repaint(); });
+        this.actor.connect('leave-event', () => { this._hover = false; this._area.queue_repaint(); });
+        this.actor.connect('clicked', () => {
+            if (!this._sensitive) return;
+            this.setToggleState(!this.state);
+            this._pop();
+            this.emit('toggled', this.state);
+        });
+        this._updateTooltip();
+    }
+
+    setToggleState(state) {
+        this.state = state;
+        this._updateTooltip();
+        this._area.queue_repaint();
+    }
+
+    setSensitive(s) {
+        this._sensitive = s;
+        this.actor.opacity = s ? 255 : 130;
+    }
+
+    _updateTooltip() {
+        this._tooltip.set_text(this.state ? 'Quitar de Tus me gusta' : 'Guardar en Tus me gusta');
+    }
+
+    _pop() {
+        this.actor.remove_all_transitions();
+        this.actor.ease({
+            scale_x: 1.35, scale_y: 1.35, duration: 120, mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onComplete: () => this.actor.ease({ scale_x: 1, scale_y: 1, duration: 180, mode: Clutter.AnimationMode.EASE_OUT_BACK }),
+        });
+    }
+
+    _repaint(area) {
+        let cr = area.get_context();
+        let [w, h] = area.get_surface_size();
+        let k = Math.min(w, h) / 38;
+        cr.newPath();
+        for (let i = 0; i <= 64; i++) {
+            let t = i / 64 * 2 * Math.PI;
+            let x = 16 * Math.pow(Math.sin(t), 3);
+            let y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+            let px = w / 2 + x * k, py = h / 2 - y * k - k;
+            if (i === 0) cr.moveTo(px, py); else cr.lineTo(px, py);
+        }
+        cr.closePath();
+        if (this.state) {
+            cr.setSourceRGBA(0.114, 0.725, 0.329, 1);
+            cr.fill();
+        } else {
+            let a = this._hover ? 1 : 0.7;
+            cr.setSourceRGBA(a, a, a, a);
+            cr.setLineWidth(1.8);
+            cr.stroke();
+        }
+        cr.$dispose();
+    }
+}
+Signals.addSignalMethods(HeartButton.prototype);
+
 // A label clipped to a fixed width that scrolls back and forth when the text doesn't fit
 class Marquee {
     constructor(styleClass, width) {
@@ -250,6 +602,7 @@ class SpotifyApplet extends Applet.IconApplet {
         this.settings = new Settings.AppletSettings(this, metadata.uuid, instanceId);
         this.settings.bind('cover-size', 'coverSize', () => this._onSizesChanged());
         this.settings.bind('preview-size', 'previewSize', () => this._onSizesChanged());
+        this.settings.bind('bar-style', 'barStyle', () => this._onBarStyleChanged());
         this.settings.bind('client-id', 'clientId', () => this._refreshLists());
 
         this.set_applet_icon_name('spotify-client');
@@ -410,20 +763,22 @@ class SpotifyApplet extends Applet.IconApplet {
         box.add(this._coverBin, { x_fill: false, x_align: St.Align.MIDDLE });
 
         let w = this._menuTextWidth();
-        this._titleLabel = new Marquee('spotify-title', w);
-        this._artistLabel = new Marquee('spotify-artist', w);
-        this._albumLabel = new Marquee('spotify-album', w);
-        box.add(this._titleLabel.actor);
-        box.add(this._artistLabel.actor);
-        box.add(this._albumLabel.actor);
+        let header = new St.BoxLayout();
+        let textCol = new St.BoxLayout({ vertical: true });
+        this._titleLabel = new Marquee('spotify-title', w - HEART_SPACE);
+        this._artistLabel = new Marquee('spotify-artist', w - HEART_SPACE);
+        this._albumLabel = new Marquee('spotify-album', w - HEART_SPACE);
+        textCol.add(this._titleLabel.actor);
+        textCol.add(this._artistLabel.actor);
+        textCol.add(this._albumLabel.actor);
+        header.add(textCol, { expand: true });
+        this._likeItem = new HeartButton();
+        this._likeItem.connect('toggled', (item, state) => this._toggleLike(state));
+        header.add(this._likeItem.actor, { expand: false, x_fill: false, y_fill: false, y_align: St.Align.MIDDLE });
+        box.add(header);
 
         // Seek bar
-        this._seek = new WaveSeeker(w);
-        this._seek.connect('preview', (sk, v) => this._posLabel.text = fmtTime(v * this._length));
-        this._seek.connect('seek', (sk, v) => this._seekTo(v));
-        this._seek.connect('seek-relative', (sk, secs) => {
-            if (this._length) this._seekTo((this._currentPos() + secs * 1e6) / this._length);
-        });
+        this._seek = this._makeSeeker(w);
         box.add(this._seek.actor, { x_fill: false, x_align: St.Align.MIDDLE });
 
         let times = new St.BoxLayout();
@@ -482,9 +837,6 @@ class SpotifyApplet extends Applet.IconApplet {
     _buildListsSection() {
         this._connectItem = this.menu.addAction('Conectar cuenta de Spotify…', () => this._login());
 
-        this._likeItem = new PopupMenu.PopupSwitchMenuItem('Me gusta', false);
-        this._likeItem.connect('toggled', (item, state) => this._toggleLike(state));
-        this.menu.addMenuItem(this._likeItem);
 
         this._listsSub = new PopupMenu.PopupSubMenuMenuItem('Añadir a listas');
         this.menu.addMenuItem(this._listsSub);
@@ -797,6 +1149,26 @@ class SpotifyApplet extends Applet.IconApplet {
 
     // ---------- Hover preview ----------
 
+    _makeSeeker(w) {
+        let seek = new (SEEKERS[this.barStyle] || LiquidSeeker)(w);
+        seek.connect('preview', (sk, v) => this._posLabel.text = fmtTime(v * this._length));
+        seek.connect('seek', (sk, v) => this._seekTo(v));
+        seek.connect('seek-relative', (sk, secs) => {
+            if (this._length) this._seekTo((this._currentPos() + secs * 1e6) / this._length);
+        });
+        seek.setSeed(this._meta['mpris:trackid'] || '');
+        return seek;
+    }
+
+    _onBarStyleChanged() {
+        if (!this._seek) return;
+        let old = this._seek;
+        this._seek = this._makeSeeker(this._menuTextWidth());
+        old.actor.get_parent().replace_child(old.actor, this._seek.actor);
+        old.actor.destroy();
+        this._updateSeek();
+    }
+
     _menuTextWidth() {
         return Math.max(this.coverSize || 220, 240);
     }
@@ -862,7 +1234,7 @@ class SpotifyApplet extends Applet.IconApplet {
 
     _onSizesChanged() {
         let w = this._menuTextWidth();
-        [this._titleLabel, this._artistLabel, this._albumLabel].forEach(m => m.setWidth(w));
+        [this._titleLabel, this._artistLabel, this._albumLabel].forEach(m => m.setWidth(w - HEART_SPACE));
         this._seek.setWidth(w);
         this._showCover();
     }
@@ -947,6 +1319,7 @@ class SpotifyApplet extends Applet.IconApplet {
 
     on_applet_removed_from_panel() {
         if (this._pollId) Mainloop.source_remove(this._pollId);
+        this._pollId = 0;
         this._hidePreview();
         [this._titleLabel, this._artistLabel, this._albumLabel].forEach(m => m.destroy());
         this._preview.destroy();
