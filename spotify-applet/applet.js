@@ -1,7 +1,8 @@
 const Applet = imports.ui.applet;
 const Main = imports.ui.main;
 const PopupMenu = imports.ui.popupMenu;
-const Slider = imports.ui.slider;
+const Cairo = imports.cairo;
+const Signals = imports.signals;
 const Settings = imports.ui.settings;
 const Tooltips = imports.ui.tooltips;
 const Util = imports.misc.util;
@@ -41,6 +42,135 @@ function decodeEntities(s) {
         .replace(/&#(\d+);/g, (m, d) => String.fromCharCode(parseInt(d, 10)))
         .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 }
+
+// Seek bar drawn as a waveform: one shape per track, played part in green,
+// bars breathe while playing and glow around the playhead.
+class WaveSeeker {
+    constructor(width) {
+        this.actor = new St.DrawingArea({ style_class: 'spotify-wave', reactive: true });
+        this.actor.set_size(width, 42);
+        this.value = 0;
+        this.playing = false;
+        this._t = 0;
+        this._hoverX = -1;
+        this._dragging = false;
+        this.setSeed('');
+        this.actor.connect('repaint', area => this._repaint(area));
+        this.actor.connect('button-press-event', (a, e) => this._press(e));
+        this.actor.connect('button-release-event', (a, e) => this._release(e));
+        this.actor.connect('motion-event', (a, e) => this._motion(e));
+        this.actor.connect('leave-event', () => { this._hoverX = -1; this.actor.queue_repaint(); });
+        this.actor.connect('scroll-event', (a, e) => {
+            let d = e.get_scroll_direction();
+            if (d === Clutter.ScrollDirection.UP) this.emit('seek-relative', 5);
+            else if (d === Clutter.ScrollDirection.DOWN) this.emit('seek-relative', -5);
+            return Clutter.EVENT_STOP;
+        });
+    }
+
+    get dragging() {
+        return this._dragging;
+    }
+
+    setWidth(w) {
+        this.actor.width = w;
+        this.actor.queue_repaint();
+    }
+
+    // deterministic pseudo-random heights from the track id, smoothed so it looks like audio
+    setSeed(str) {
+        let h = 2166136261;
+        for (let i = 0; i < str.length; i++)
+            h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+        let rnd = () => {
+            h = Math.imul(h ^ (h >>> 15), 2246822507);
+            h = Math.imul(h ^ (h >>> 13), 3266489909);
+            return ((h ^= h >>> 16) >>> 0) / 4294967296;
+        };
+        let raw = Array.from({ length: 160 }, () => rnd());
+        this._heights = raw.map((v, i) => {
+            let a = raw[Math.max(0, i - 1)], c = raw[Math.min(raw.length - 1, i + 1)];
+            let env = 0.55 + 0.45 * Math.sin(i / 9 + raw[0] * 6);   // slow swell
+            return Math.max(0.18, Math.min(1, (a + 2 * v + c) / 4 * env + 0.15));
+        });
+        this.actor.queue_repaint();
+    }
+
+    setValue(v) {
+        if (!this._dragging) this.value = Math.max(0, Math.min(1, v));
+        this.actor.queue_repaint();
+    }
+
+    tick(seconds) {
+        this._t += seconds;
+        this.actor.queue_repaint();
+    }
+
+    _xToValue(event) {
+        let [x] = event.get_coords();
+        let [ax] = this.actor.get_transformed_position();
+        return Math.max(0, Math.min(1, (x - ax) / this.actor.width));
+    }
+
+    _press(event) {
+        this._dragging = true;
+        event.get_device().grab(this.actor);
+        this.value = this._xToValue(event);
+        this.emit('preview', this.value);
+        this.actor.queue_repaint();
+        return Clutter.EVENT_STOP;
+    }
+
+    _release(event) {
+        if (!this._dragging) return Clutter.EVENT_PROPAGATE;
+        event.get_device().ungrab();
+        this._dragging = false;
+        this.value = this._xToValue(event);
+        this.emit('seek', this.value);
+        return Clutter.EVENT_STOP;
+    }
+
+    _motion(event) {
+        let v = this._xToValue(event);
+        if (this._dragging) {
+            this.value = v;
+            this.emit('preview', v);
+        }
+        this._hoverX = v * this.actor.width;
+        this.actor.queue_repaint();
+        return Clutter.EVENT_STOP;
+    }
+
+    _repaint(area) {
+        let cr = area.get_context();
+        let [w, h] = area.get_surface_size();
+        let barW = 3, step = 5;
+        let n = Math.floor((w + step - barW) / step);
+        let offset = (w - ((n - 1) * step + barW)) / 2 + barW / 2;
+        let playX = this.value * w;
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        cr.setLineWidth(barW);
+        for (let i = 0; i < n; i++) {
+            let x = offset + i * step;
+            let base = this._heights[i % this._heights.length];
+            let wobble = this.playing ? 0.8 + 0.2 * Math.sin(this._t * 6 + i * 0.6) * Math.sin(this._t * 2.3 + i * 0.17) : 0.8;
+            let glow = Math.max(0, 1 - Math.abs(x - playX) / 22);
+            let amp = Math.min(1, base * wobble + glow * (this.playing ? 0.35 : 0.2));
+            let bh = Math.max(barW, amp * (h - 4));
+            if (x <= playX)
+                cr.setSourceRGBA(0.114, 0.725 + 0.2 * glow * 0.3, 0.329, 1);
+            else if (this._hoverX >= 0 && x <= this._hoverX)
+                cr.setSourceRGBA(0.114, 0.725, 0.329, 0.45);
+            else
+                cr.setSourceRGBA(0.6, 0.6, 0.6, 0.35);
+            cr.moveTo(x, (h - bh) / 2 + barW / 2);
+            cr.lineTo(x, (h + bh) / 2 - barW / 2);
+            cr.stroke();
+        }
+        cr.$dispose();
+    }
+}
+Signals.addSignalMethods(WaveSeeker.prototype);
 
 // A label clipped to a fixed width that scrolls back and forth when the text doesn't fit
 class Marquee {
@@ -137,7 +267,7 @@ class SpotifyApplet extends Applet.IconApplet {
         this._coverUrl = null;
         this._coverPath = null;
         this._pollId = 0;
-        this._seekDragging = false;
+        this._posStamp = 0;
         this._artistsCache = {};
         this._fullArtists = null;
         this._previewTimer = 0;
@@ -197,7 +327,7 @@ class SpotifyApplet extends Applet.IconApplet {
                 this._applyProps(changed);
         });
         sub(IFACE_PLAYER, 'Seeked', (c, s, p, i, sig, params) => {
-            this._position = params.recursiveUnpack()[0];
+            this._setPos(params.recursiveUnpack()[0]);
             this._updateSeek();
         });
         this._call(IFACE_PROPS, 'GetAll', new GLib.Variant('(s)', [IFACE_PLAYER]),
@@ -215,13 +345,20 @@ class SpotifyApplet extends Applet.IconApplet {
     }
 
     _applyProps(p) {
-        if (p.PlaybackStatus !== undefined) this._status = p.PlaybackStatus;
+        if (p.PlaybackStatus !== undefined) {
+            this._setPos(this._currentPos());   // freeze/restart interpolation at the current point
+            this._status = p.PlaybackStatus;
+        }
         if (p.Shuffle !== undefined) this._shuffle = p.Shuffle;
         if (p.LoopStatus !== undefined) this._loop = p.LoopStatus;
         if (p.Volume !== undefined) this._volume = p.Volume;
-        if (p.Position !== undefined) this._position = p.Position;
+        if (p.Position !== undefined) this._setPos(p.Position);
         if (p.Metadata !== undefined) {
+            // new track: start the bar at 0 instead of the old track's position
+            if (p.Metadata['mpris:trackid'] !== this._meta['mpris:trackid'] && p.Position === undefined)
+                this._setPos(0);
             this._meta = p.Metadata;
+            this._seek.setSeed(p.Metadata['mpris:trackid'] || '');
             this._length = p.Metadata['mpris:length'] || 0;
             // Spotify emits no Seeked on track change; fetch the real position
             this._refreshPosition();
@@ -232,10 +369,23 @@ class SpotifyApplet extends Applet.IconApplet {
         this._updateAll();
     }
 
+    _setPos(us) {
+        this._position = us;
+        this._posStamp = GLib.get_monotonic_time();
+    }
+
+    // position extrapolated since the last report, so the bar moves smoothly
+    _currentPos() {
+        let p = this._position;
+        if (this._status === 'Playing' && this._posStamp)
+            p += GLib.get_monotonic_time() - this._posStamp;
+        return this._length ? Math.min(p, this._length) : p;
+    }
+
     _refreshPosition() {
         if (!this._owner) return;
         this._call(IFACE_PROPS, 'Get', new GLib.Variant('(ss)', [IFACE_PLAYER, 'Position']), r => {
-            this._position = r.recursiveUnpack()[0];
+            this._setPos(r.recursiveUnpack()[0]);
             this._updateSeek();
         });
     }
@@ -268,20 +418,13 @@ class SpotifyApplet extends Applet.IconApplet {
         box.add(this._albumLabel.actor);
 
         // Seek bar
-        this._seek = new Slider.Slider(0, true);
-        this._seek.connect('drag-begin', () => this._seekDragging = true);
-        this._seek.connect('drag-end', () => {
-            this._seekDragging = false;
-        this._artistsCache = {};
-        this._fullArtists = null;
-        this._previewTimer = 0;
-            this._seekTo(this._seek._value);
+        this._seek = new WaveSeeker(w);
+        this._seek.connect('preview', (sk, v) => this._posLabel.text = fmtTime(v * this._length));
+        this._seek.connect('seek', (sk, v) => this._seekTo(v));
+        this._seek.connect('seek-relative', (sk, secs) => {
+            if (this._length) this._seekTo((this._currentPos() + secs * 1e6) / this._length);
         });
-        this._seek.connect('value-changed', (s, v) => {
-            if (!this._seekDragging) this._seekTo(v);
-            else this._posLabel.text = fmtTime(v * this._length);
-        });
-        box.add(this._seek.actor, { expand: true });
+        box.add(this._seek.actor, { x_fill: false, x_align: St.Align.MIDDLE });
 
         let times = new St.BoxLayout();
         this._posLabel = new St.Label({ style_class: 'spotify-time', text: '0:00' });
@@ -374,11 +517,24 @@ class SpotifyApplet extends Applet.IconApplet {
         }
     }
 
+    // Hiding or destroying the item that has key focus makes Cinnamon close the
+    // whole menu, so park the focus on the menu itself first.
+    _parkFocus() {
+        let focus = global.stage.key_focus;
+        if (!this.menu.isOpen || !focus) return;
+        if ([this._connectItem, this._likeItem, this._listsSub, this._listsSub.menu]
+                .some(it => it.actor.contains(focus)))
+            this.menu.actor.grab_key_focus();
+    }
+
     // mode: hidden | connect | loading | ready | error
     _setListsMode(mode, message) {
         let running = !!this._owner;
+        this._parkFocus();
+        // while reloading keep the switches in place (disabled) so the menu doesn't jump
+        let wasReady = this._likeItem.actor.visible;
         this._connectItem.actor.visible = running && mode === 'connect';
-        this._likeItem.actor.visible = running && mode === 'ready';
+        this._likeItem.actor.visible = running && (mode === 'ready' || (mode === 'loading' && wasReady));
         this._listsSub.actor.visible = running && ['loading', 'ready', 'error'].includes(mode);
         if (message !== undefined) this._listsStatus.label.text = message;
         this._listsStatus.actor.visible = mode !== 'ready' || !!message;
@@ -425,6 +581,7 @@ class SpotifyApplet extends Applet.IconApplet {
     _fillLists(uri, state) {
         this._likeItem.setSensitive(true);
         this._likeItem.setToggleState(state.liked);
+        this._parkFocus();
         this._listsSub.menu.removeAll();
         this._listsStatus = new PopupMenu.PopupMenuItem('', { reactive: false });
         this._listsSub.menu.addMenuItem(this._listsStatus);
@@ -530,7 +687,7 @@ class SpotifyApplet extends Applet.IconApplet {
     _seekTo(fraction) {
         let trackid = this._meta['mpris:trackid'];
         if (!trackid || !this._length) return;
-        this._position = Math.round(fraction * this._length);
+        this._setPos(Math.max(0, Math.min(this._length, Math.round(fraction * this._length))));
         this._player('SetPosition', new GLib.Variant('(ox)', [trackid, this._position]));
         this._updateSeek();
     }
@@ -589,9 +746,11 @@ class SpotifyApplet extends Applet.IconApplet {
     }
 
     _updateSeek() {
-        if (!this._seekDragging) {
-            this._seek.setValue(this._length ? this._position / this._length : 0);
-            this._posLabel.text = fmtTime(this._position);
+        this._seek.playing = this._status === 'Playing';
+        if (!this._seek.dragging) {
+            let pos = this._currentPos();
+            this._seek.setValue(this._length ? pos / this._length : 0);
+            this._posLabel.text = fmtTime(pos);
         }
         this._lenLabel.text = fmtTime(this._length);
     }
@@ -704,6 +863,7 @@ class SpotifyApplet extends Applet.IconApplet {
     _onSizesChanged() {
         let w = this._menuTextWidth();
         [this._titleLabel, this._artistLabel, this._albumLabel].forEach(m => m.setWidth(w));
+        this._seek.setWidth(w);
         this._showCover();
     }
 
@@ -753,8 +913,11 @@ class SpotifyApplet extends Applet.IconApplet {
         }
         if (open) {
             this._refreshPosition();
-            this._pollId = Mainloop.timeout_add_seconds(1, () => {
-                if (this._status === 'Playing') this._refreshPosition();
+            let ticks = 0;
+            this._pollId = Mainloop.timeout_add(40, () => {
+                this._seek.tick(0.04);
+                this._updateSeek();
+                if (++ticks % 50 === 0 && this._status === 'Playing') this._refreshPosition();
                 return true;
             });
         }
