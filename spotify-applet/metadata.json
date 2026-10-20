@@ -1,0 +1,7 @@
+{
+ "uuid": "spotify-applet",
+ "name": "Spotify",
+ "description": "Control completo del reproductor de Spotify: portada, progreso, aleatorio, repetir, volumen y búsqueda",
+ "icon": "spotify-client",
+ "max-instances": 1
+}

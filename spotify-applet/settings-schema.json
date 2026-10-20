@@ -1,0 +1,8 @@
+{
+  "head-look": {"type": "header", "description": "Aspecto"},
+  "cover-size": {"type": "spinbutton", "default": 220, "min": 120, "max": 400, "step": 10, "units": "px", "description": "Tamaño de la portada en el menú"},
+  "preview-size": {"type": "spinbutton", "default": 96, "min": 48, "max": 200, "step": 8, "units": "px", "description": "Tamaño de la portada en la vista previa (al pasar el ratón)"},
+  "head-account": {"type": "header", "description": "Cuenta de Spotify (para listas y Me gusta)"},
+  "client-id": {"type": "entry", "default": "", "description": "Client ID de tu app de Spotify", "tooltip": "Créala en developer.spotify.com/dashboard con Redirect URI http://127.0.0.1:8898/callback"},
+  "logout": {"type": "button", "description": "Desconectar cuenta", "callback": "logout"}
+}

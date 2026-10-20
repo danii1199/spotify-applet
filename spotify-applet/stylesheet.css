@@ -1,0 +1,18 @@
+.spotify-box { padding: 6px 12px; spacing: 6px; min-width: 260px; }
+.spotify-title { font-weight: bold; font-size: 1.1em; }
+.spotify-artist { font-size: 0.95em; }
+.spotify-album { font-size: 0.85em; color: #999; }
+.spotify-time { font-size: 0.8em; color: #999; }
+.spotify-controls { spacing: 10px; padding: 4px 0; }
+.spotify-button { padding: 6px; border-radius: 99px; }
+.spotify-button:hover { background-color: rgba(128,128,128,0.25); }
+.spotify-button-active StIcon { color: #1db954; }
+.spotify-play { background-color: #1db954; padding: 10px; }
+.spotify-play StIcon { color: #000; }
+.spotify-play:hover { background-color: #1ed760; }
+.spotify-entry { min-width: 240px; }
+.spotify-preview { background-color: rgba(24,24,24,0.96); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 10px; spacing: 12px; color: #fff; }
+.spotify-preview-text { spacing: 3px; }
+.spotify-preview .spotify-album { color: #b3b3b3; }
+.spotify-preview .spotify-artist { color: #e0e0e0; }
+.spotify-preview-cover { border-radius: 6px; }
