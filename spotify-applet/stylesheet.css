@@ -18,3 +18,4 @@
 .spotify-preview-cover { border-radius: 6px; }
 .spotify-heart { padding: 4px; border-radius: 99px; }
 .spotify-heart:hover { background-color: rgba(128,128,128,0.18); }
+.spotify-chosen { color: #1db954; font-weight: bold; }

@@ -6,10 +6,12 @@ Controla Spotify desde el panel de Cinnamon (Linux Mint).
 - Menú con portada, aleatorio, anterior/pausa/siguiente, repetir (no / lista / canción).
 - Barra de progreso animada con 6 diseños a elegir en *Configurar*: líquida, clásica de Spotify, onda de sonido, neón, cuentas y ecualizador. Clic o arrastrar para saltar, rueda = ±5 s.
 - Volumen propio de Spotify (independiente del del sistema). Rueda del ratón sobre el icono = volumen, clic central = pausa.
-- Buscar en Spotify o pegar un enlace `open.spotify.com` para reproducirlo.
+- Buscar dentro del propio menú (canciones, álbumes, artistas, listas) o pegar un enlace `open.spotify.com` para reproducirlo.
 - Copiar enlace de la canción, mostrar / cerrar Spotify.
 - Textos largos se desplazan solos.
 - Con tu cuenta conectada: corazón de **Me gusta** junto al título y **añadir / quitar la canción de tus listas**.
+- **Reproducir lista**: tus listas y Canciones que te gustan. Con el aleatorio activado empiezan por una canción al azar. El menú no se cierra al elegir.
+- Deja Spotify **en segundo plano, sin ventana**, al abrirse (con la ventana visible gasta ~50 % de CPU, de fondo ~4 %); se desactiva en *Configurar*. *Mostrar Spotify* abre la ventana y cerrarla la vuelve a dejar de fondo.
 
 ## Instalar
 
@@ -33,6 +35,16 @@ Spotify no permite tocar listas desde el escritorio (MPRIS), así que esto usa l
 
 Desde febrero de 2026 Spotify exige que el dueño de la app tenga **Premium** (y máximo 5 usuarios por app).
 La sesión se guarda en `~/.config/spotify-applet/token.json` (no está en el repo; en un sistema nuevo hay que volver a conectar).
+
+## Spotify en segundo plano
+
+En Linux, cerrar la ventana de Spotify cierra la app. Spotify tiene una opción oculta para que siga sonando de fondo; con Spotify cerrado, añade esta línea a `~/.config/spotify/Users/<tu-usuario>-user/prefs`:
+
+```
+ui.minimize_to_tray=true
+```
+
+Sin ella, la miniaplicación solo minimiza la ventana.
 
 ## Archivos
 

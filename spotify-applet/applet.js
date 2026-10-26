@@ -603,7 +603,11 @@ class SpotifyApplet extends Applet.IconApplet {
         this.settings.bind('cover-size', 'coverSize', () => this._onSizesChanged());
         this.settings.bind('preview-size', 'previewSize', () => this._onSizesChanged());
         this.settings.bind('bar-style', 'barStyle', () => this._onBarStyleChanged());
-        this.settings.bind('client-id', 'clientId', () => this._refreshLists());
+        this.settings.bind('client-id', 'clientId', () => {
+            this._refreshLists();
+            this._refreshLibrary(true);
+        });
+        this.settings.bind('minimize-app', 'minimizeApp');
 
         this.set_applet_icon_name('spotify-client');
         this.set_applet_tooltip(''); // replaced by the cover preview
@@ -627,6 +631,8 @@ class SpotifyApplet extends Applet.IconApplet {
         this._listsTrack = null;   // track the lists submenu currently reflects
         this._listsBusy = false;
         this._loggingIn = false;
+        this._account = 'unknown';   // unknown | connect | ok
+        this._library = null;        // playlists to play, loaded once per session
 
         GLib.mkdir_with_parents(CACHE_DIR, 0o755);
 
@@ -642,10 +648,46 @@ class SpotifyApplet extends Applet.IconApplet {
         this.actor.connect('leave-event', () => this._hidePreview());
         this.actor.connect('button-press-event', () => { this._hidePreview(); return Clutter.EVENT_PROPAGATE; });
 
+        this._started = false;   // Spotify already running when the applet loaded isn't minimized
         this._watchId = Gio.bus_watch_name(Gio.BusType.SESSION, BUS, Gio.BusNameWatcherFlags.NONE,
             (c, name, owner) => this._onAppeared(owner),
             () => this._onVanished());
         this._onVanished();
+        Mainloop.timeout_add_seconds(2, () => { this._started = true; return false; });
+    }
+
+    // Hidden pref ui.minimize_to_tray makes Spotify's close button keep it running
+    // in the background; without it closing the window would quit the app.
+    _closesToTray() {
+        let dir = GLib.get_user_config_dir() + '/spotify/Users';
+        try {
+            let en = Gio.File.new_for_path(dir).enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = en.next_file(null))) {
+                let [ok, bytes] = GLib.file_get_contents(dir + '/' + info.get_name() + '/prefs');
+                if (ok && /^ui\.minimize_to_tray=true$/m.test(imports.byteArray.toString(bytes))) return true;
+            }
+        } catch (e) {}
+        return false;
+    }
+
+    // Spotify's window burns ~50% CPU while visible and almost nothing hidden, so put it
+    // away when the app starts (closed to the background if possible, else minimized);
+    // its window shows up a bit after MPRIS.
+    _minimizeWhenShown() {
+        let tries = 0;
+        let toTray = this._closesToTray();
+        if (this._minimizeId) Mainloop.source_remove(this._minimizeId);
+        this._minimizeId = Mainloop.timeout_add(500, () => {
+            let wins = global.get_window_actors().map(a => a.meta_window)
+                .filter(w => /^spotify$/i.test(w.get_wm_class() || ''));
+            wins.forEach(w => toTray ? w.delete(global.get_current_time()) : w.minimize());
+            if (wins.length || ++tries > 30) {
+                this._minimizeId = 0;
+                return false;
+            }
+            return true;
+        });
     }
 
     // ---------- DBus ----------
@@ -672,6 +714,7 @@ class SpotifyApplet extends Applet.IconApplet {
 
     _onAppeared(owner) {
         this._owner = owner;
+        if (this._started && this.minimizeApp) this._minimizeWhenShown();
         let sub = (iface, member, cb) => this._signalIds.push(Gio.DBus.session.signal_subscribe(
             owner, iface, member, PATH, null, Gio.DBusSignalFlags.NONE, cb));
         sub(IFACE_PROPS, 'PropertiesChanged', (c, s, p, i, sig, params) => {
@@ -694,6 +737,7 @@ class SpotifyApplet extends Applet.IconApplet {
         this._signalIds = [];
         this._status = 'Stopped';
         this._meta = {};
+        this._coverUrl = null;   // the cover is cleared below; reload it even if the same song comes back
         this._setRunning(false);
     }
 
@@ -822,6 +866,8 @@ class SpotifyApplet extends Applet.IconApplet {
         this._entry.clutter_text.connect('activate', () => this._onEntry());
         entryItem.addActor(this._entry, { expand: true, span: -1 });
         this.menu.addMenuItem(entryItem);
+        this._results = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._results);
 
         this._copyItem = this.menu.addAction('Copiar enlace de la canción', () => {
             let url = this._meta['xesam:url'];
@@ -837,6 +883,9 @@ class SpotifyApplet extends Applet.IconApplet {
     _buildListsSection() {
         this._connectItem = this.menu.addAction('Conectar cuenta de Spotify…', () => this._login());
 
+        this._playSub = new PopupMenu.PopupSubMenuMenuItem('Reproducir lista');
+        this.menu.addMenuItem(this._playSub);
+        this._playSub.actor.visible = false;
 
         this._listsSub = new PopupMenu.PopupSubMenuMenuItem('Añadir a listas');
         this.menu.addMenuItem(this._listsSub);
@@ -874,7 +923,8 @@ class SpotifyApplet extends Applet.IconApplet {
     _parkFocus() {
         let focus = global.stage.key_focus;
         if (!this.menu.isOpen || !focus) return;
-        if ([this._connectItem, this._likeItem, this._listsSub, this._listsSub.menu]
+        if ([this._connectItem, this._likeItem, this._listsSub, this._listsSub.menu, this._playSub, this._playSub.menu,
+             this._results]
                 .some(it => it.actor.contains(focus)))
             this.menu.actor.grab_key_focus();
     }
@@ -885,11 +935,125 @@ class SpotifyApplet extends Applet.IconApplet {
         this._parkFocus();
         // while reloading keep the switches in place (disabled) so the menu doesn't jump
         let wasReady = this._likeItem.actor.visible;
-        this._connectItem.actor.visible = running && mode === 'connect';
+        if (mode === 'connect') this._setAccount('connect');
         this._likeItem.actor.visible = running && (mode === 'ready' || (mode === 'loading' && wasReady));
         this._listsSub.actor.visible = running && ['loading', 'ready', 'error'].includes(mode);
         if (message !== undefined) this._listsStatus.label.text = message;
         this._listsStatus.actor.visible = mode !== 'ready' || !!message;
+    }
+
+    _setAccount(state, label) {
+        this._account = state;
+        this._parkFocus();
+        this._connectItem.actor.visible = state === 'connect';
+        this._connectItem.label.text = label || 'Conectar cuenta de Spotify…';
+        this._playSub.actor.visible = state === 'ok';
+    }
+
+    // playlists to play: shown even with no player running, since playing one starts it
+    _refreshLibrary(force) {
+        if (!this.clientId) {
+            this._setAccount('connect');
+            return;
+        }
+        if (this._libraryBusy || (this._library && !force)) return;
+        this._libraryBusy = true;
+        this._runHelper(['library'], r => {
+            this._libraryBusy = false;
+            if (r.error) {
+                if (r.status === 401) this._setAccount('connect');
+                return;
+            }
+            this._library = r.playlists;
+            this._parkFocus();
+            this._playSub.menu.removeAll();
+            for (let pl of r.playlists) {
+                let item = this._playItem(pl.name,
+                    pl.liked ? 'emblem-favorite-symbolic' : 'media-playlist-consecutive-symbolic', pl.uri);
+                this._playSub.menu.addMenuItem(item);
+            }
+            this._setAccount('ok');
+        });
+    }
+
+    // Menu entry that plays uri and keeps the menu open, marking what was chosen.
+    _playItem(text, icon, uri) {
+        let item = new PopupMenu.PopupIconMenuItem(text, icon, St.IconType.SYMBOLIC);
+        item._uri = uri;
+        item.activate = event => {
+            this._play(uri);
+            PopupMenu.PopupBaseMenuItem.prototype.activate.call(item, event, true);
+        };
+        if (uri === this._lastPlayed) item.label.add_style_class_name('spotify-chosen');
+        return item;
+    }
+
+    _markChosen() {
+        for (let menu of [this._playSub.menu, this._results])
+            for (let item of menu._getMenuItems())
+                if (item._uri !== undefined) {
+                    if (item._uri === this._lastPlayed) item.label.add_style_class_name('spotify-chosen');
+                    else item.label.remove_style_class_name('spotify-chosen');
+                }
+    }
+
+    // Plays through the Web API (OpenUri can't start lists reliably), opening Spotify if needed.
+    // Lists follow the shuffle button: on = start at a random song.
+    _play(uri) {
+        if (this._account !== 'ok') {
+            this._openUri(uri);
+            return;
+        }
+        this._lastPlayed = uri;
+        this._markChosen();
+        let go = () => this._runHelper(['play', '', this._shuffle ? '1' : '0', uri], r => {
+            if (!r.error) return;
+            this._lastPlayed = null;
+            this._markChosen();
+            if (r.status === 'scope')
+                this._setAccount('connect', 'Reconectar cuenta (permiso para reproducir)…');
+            else if (r.status === 'no-device')
+                Main.notify('Spotify', 'Spotify no ha terminado de abrirse; prueba otra vez en unos segundos');
+            else
+                Main.notify('Spotify', this._errorText(r));
+        });
+        if (!this._owner) Util.spawn(['spotify']);
+        go();
+    }
+
+    _openUri(uri) {
+        if (this._owner)
+            this._player('OpenUri', new GLib.Variant('(s)', [uri]));
+        else
+            Util.spawn(['spotify', '--uri=' + uri]);
+    }
+
+    _search(text) {
+        this._parkFocus();
+        this._results.removeAll();
+        let status = new PopupMenu.PopupMenuItem('Buscando…', { reactive: false });
+        this._results.addMenuItem(status);
+        this._runHelper(['search', text], r => {
+            this._parkFocus();
+            this._results.removeAll();
+            if (r.error) {
+                this._results.addMenuItem(new PopupMenu.PopupMenuItem(this._errorText(r), { reactive: false }));
+                return;
+            }
+            let groups = [['tracks', 'audio-x-generic-symbolic'], ['albums', 'media-optical-symbolic'],
+                          ['artists', 'avatar-default-symbolic'], ['playlists', 'media-playlist-consecutive-symbolic']];
+            let any = false;
+            for (let [key, icon] of groups) {
+                for (let it of (r[key] || []).slice(0, key === 'tracks' ? 5 : 3)) {
+                    any = true;
+                    let item = this._playItem(it.sub ? it.name + '  ·  ' + it.sub : it.name, icon, it.uri);
+                    item.label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+                    item.label.style = 'max-width: ' + this._menuTextWidth() + 'px;';
+                    this._results.addMenuItem(item);
+                }
+            }
+            if (!any) this._results.addMenuItem(new PopupMenu.PopupMenuItem('Sin resultados', { reactive: false }));
+        });
     }
 
     _errorText(r) {
@@ -992,6 +1156,7 @@ class SpotifyApplet extends Applet.IconApplet {
                 this._connectItem.label.text = 'No se pudo conectar (' + r.error.slice(0, 60) + '). Reintentar…';
             } else {
                 Main.notify('Spotify', 'Cuenta conectada' + (r.user ? ': ' + r.user : ''));
+                this._refreshLibrary(true);
                 if (this.menu.isOpen) this._refreshLists();
             }
         });
@@ -1000,21 +1165,27 @@ class SpotifyApplet extends Applet.IconApplet {
     logout() {
         this._runHelper(['logout'], () => {
             this._listsTrack = null;
-            this._setListsMode(this.clientId ? 'connect' : 'hidden');
+            this._library = null;
+            this._setListsMode('hidden');
+            this._setAccount('connect');
         });
     }
 
     _onEntry() {
         let text = this._entry.get_text().trim();
         if (!text) return;
-        let uri = toSpotifyUri(text) || 'spotify:search:' + encodeURIComponent(text);
-        this._entry.set_text('');
-        this.menu.close();
-        if (this._owner) {
-            this._player('OpenUri', new GLib.Variant('(s)', [uri]));
-            if (uri.startsWith('spotify:search:')) this._raise();
+        let uri = toSpotifyUri(text);
+        if (uri) {
+            this._entry.set_text('');
+            this.menu.close();
+            this._play(uri);
+        } else if (this._account === 'ok') {
+            this._search(text);
         } else {
-            Util.spawn(['spotify', '--uri=' + uri]);
+            // no account: let the official app search
+            this.menu.close();
+            this._openUri('spotify:search:' + encodeURIComponent(text));
+            this._raise();
         }
     }
 
@@ -1276,7 +1447,11 @@ class SpotifyApplet extends Applet.IconApplet {
     _onMenuToggled(open) {
         if (open) {
             this._hidePreview();
+            this._refreshLibrary();
             if (this._listsTrack !== this._trackUri() || !this._likeItem.actor.visible) this._refreshLists();
+        } else {
+            this._results.removeAll();
+            this._entry.set_text('');
         }
         [this._titleLabel, this._artistLabel, this._albumLabel].forEach(m => open ? m.start() : m.stop());
         if (this._pollId) {
@@ -1324,6 +1499,7 @@ class SpotifyApplet extends Applet.IconApplet {
         [this._titleLabel, this._artistLabel, this._albumLabel].forEach(m => m.destroy());
         this._preview.destroy();
         Gio.bus_unwatch_name(this._watchId);
+        if (this._minimizeId) Mainloop.source_remove(this._minimizeId);
         this._signalIds.forEach(id => Gio.DBus.session.signal_unsubscribe(id));
         this.settings.finalize();
     }

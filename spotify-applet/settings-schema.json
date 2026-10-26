@@ -34,6 +34,16 @@
     },
     "description": "Estilo de la barra de progreso"
   },
+  "head-player": {
+    "type": "header",
+    "description": "Reproductor"
+  },
+  "minimize-app": {
+    "type": "switch",
+    "default": true,
+    "description": "Abrir Spotify en segundo plano (sin ventana)",
+    "tooltip": "Con la ventana a la vista Spotify gasta mucha CPU; de fondo casi nada. Necesita ui.minimize_to_tray=true en ~/.config/spotify/Users/*/prefs (si no, solo la minimiza). «Mostrar Spotify» la vuelve a abrir"
+  },
   "head-account": {
     "type": "header",
     "description": "Cuenta de Spotify (para listas y Me gusta)"

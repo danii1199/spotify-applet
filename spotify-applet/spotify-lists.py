@@ -11,12 +11,18 @@ Every command prints one JSON object on stdout.
   remove PLAYLIST_ID TRACK_URI
   like TRACK_URI
   unlike TRACK_URI
+  library                  Me gusta + every playlist in the library (to play them)
+  search QUERY             tracks, albums, artists and playlists
+  play DEVICE SHUFFLE URI  play URI on the device named DEVICE (or the active / a
+                           computer one if ""); SHUFFLE 1 starts a list at a
+                           random song and leaves shuffle on, 0 turns it off
 """
 import base64
 import hashlib
 import http.server
 import json
 import os
+import random
 import secrets
 import subprocess
 import sys
@@ -36,7 +42,9 @@ SCOPES = ' '.join([
     'playlist-modify-private', 'playlist-modify-public',
     'user-library-read', 'user-library-modify',
     'user-follow-read', 'user-follow-modify',
+    'user-read-playback-state', 'user-modify-playback-state',
 ])
+PLAY_SCOPE = 'user-modify-playback-state'
 
 
 class ApiError(Exception):
@@ -87,6 +95,7 @@ def store_token(tok, client_id, old=None):
         'access_token': tok['access_token'],
         'refresh_token': tok.get('refresh_token') or (old or {}).get('refresh_token'),
         'expires_at': time.time() + tok.get('expires_in', 3600),
+        'scope': tok.get('scope') or (old or {}).get('scope', ''),
     }
     save_json(TOKEN_FILE, data, private=True)
     return data
@@ -169,7 +178,10 @@ def api(method, path, params=None, body=None):
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
                 raw = r.read()
-                return json.loads(raw) if raw.strip() else {}
+                try:
+                    return json.loads(raw) if raw.strip() else {}
+                except ValueError:   # some player endpoints answer with plain text
+                    return {}
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < 2:
                 time.sleep(min(int(e.headers.get('Retry-After', '2')), 10))
@@ -224,6 +236,82 @@ def cmd_state(track):
     out({'liked': bool(liked and liked[0]), 'playlists': result})
 
 
+def names(objs):
+    return ', '.join(o.get('name', '') for o in objs or [])
+
+
+def cmd_library():
+    me = api('GET', '/me')['id']
+    lists = [{'name': 'Canciones que te gustan', 'uri': f'spotify:user:{me}:collection', 'liked': True}]
+    for p in paged('/me/playlists', {'limit': 50}):
+        if p:
+            lists.append({'name': p['name'], 'uri': p['uri'],
+                          'mine': (p.get('owner') or {}).get('id') == me})
+    out({'playlists': lists})
+
+
+def cmd_search(query):
+    r = api('GET', '/search', {'q': query, 'type': 'track,album,artist,playlist', 'limit': 5})
+    items = lambda k: [o for o in (r.get(k) or {}).get('items') or [] if o]
+    out({
+        'tracks': [{'name': t['name'], 'sub': names(t.get('artists')), 'uri': t['uri'],
+                    'context': (t.get('album') or {}).get('uri')} for t in items('tracks')],
+        'albums': [{'name': a['name'], 'sub': names(a.get('artists')), 'uri': a['uri']} for a in items('albums')],
+        'artists': [{'name': a['name'], 'sub': '', 'uri': a['uri']} for a in items('artists')],
+        'playlists': [{'name': p['name'], 'sub': (p.get('owner') or {}).get('display_name') or '', 'uri': p['uri']}
+                      for p in items('playlists')],
+    })
+
+
+def pick_device(name):
+    # a freshly started player takes a few seconds to show up in Spotify Connect
+    for attempt in range(12):
+        devices = api('GET', '/me/player/devices').get('devices') or []
+        if name:
+            found = [d for d in devices if d.get('name', '').lower() == name.lower()]
+        else:
+            found = sorted([d for d in devices if d.get('is_active') or d.get('type') == 'Computer'],
+                           key=lambda d: not d.get('is_active'))
+        if found:
+            return found[0]['id']
+        time.sleep(1)
+    return None
+
+
+def context_size(uri):
+    kind, cid = uri.split(':')[1], uri.split(':')[-1]
+    path = {'playlist': f'/playlists/{cid}/items', 'album': f'/albums/{cid}/tracks'}.get(kind)
+    if uri.endswith(':collection'):
+        path = '/me/tracks'
+    return api('GET', path, {'limit': 1}).get('total') or 0 if path else 0
+
+
+def cmd_play(device, shuffle, uri):
+    tok = load_json(TOKEN_FILE, {})
+    if PLAY_SCOPE not in (tok.get('scope') or '').split():
+        out({'error': 'falta el permiso para reproducir', 'status': 'scope'})
+    dev = pick_device(device)
+    if not dev:
+        out({'error': 'no-device', 'status': 'no-device'})
+    if uri.split(':')[1] in ('track', 'episode'):
+        body = {'uris': [uri]}   # like the app: the song, then similar ones (autoplay)
+    else:
+        body = {'context_uri': uri}
+        size = context_size(uri) if shuffle == '1' else 0
+        if size > 1:
+            body['offset'] = {'position': random.randrange(size)}
+    api('PUT', '/me/player/play', {'device_id': dev}, body)
+    if shuffle in ('0', '1'):
+        # the device may need a moment to take over before it accepts the setting
+        for attempt in range(3):
+            try:
+                api('PUT', '/me/player/shuffle', {'state': 'true' if shuffle == '1' else 'false', 'device_id': dev})
+                break
+            except ApiError:
+                time.sleep(0.7)
+    out({'ok': True})
+
+
 def update_cache(pid, snapshot, track, present):
     cache = load_json(CACHE_FILE, {})
     entry = cache.get(pid)
@@ -265,6 +353,12 @@ def main(argv):
         elif cmd == 'unlike':
             api('DELETE', '/me/library', {'uris': args[0]})
             out({'ok': True})
+        elif cmd == 'library':
+            cmd_library()
+        elif cmd == 'search':
+            cmd_search(args[0])
+        elif cmd == 'play':
+            cmd_play(*args[:3])
         else:
             out({'error': 'unknown command'})
     except ApiError as e:
