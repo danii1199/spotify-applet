@@ -13,6 +13,10 @@ Controla Spotify desde el panel de Cinnamon (Linux Mint).
 - **Reproducir lista**: tus listas y Canciones que te gustan. Con el aleatorio activado empiezan por una canción al azar. El menú no se cierra al elegir.
 - Deja Spotify **en segundo plano, sin ventana**, al abrirse (con la ventana visible gasta ~50 % de CPU, de fondo ~4 %); se desactiva en *Configurar*. *Mostrar Spotify* abre la ventana y cerrarla la vuelve a dejar de fondo.
 
+## Windows
+
+Hay una versión para Windows (icono junto al reloj) en [`windows/`](windows/README.md).
+
 ## Instalar
 
 ```bash
