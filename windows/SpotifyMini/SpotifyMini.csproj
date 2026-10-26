@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>SpotifyMini</AssemblyName>
+    <RootNamespace>SpotifyMini</RootNamespace>
+    <ApplicationIcon>spotify-mini.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <Product>Spotify Mini</Product>
+    <Description>Control de Spotify desde la bandeja del sistema</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="spotify-mini.ico" />
+  </ItemGroup>
+
+</Project>

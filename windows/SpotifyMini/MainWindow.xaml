@@ -1,0 +1,119 @@
+<Window x:Class="SpotifyMini.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Spotify Mini" Width="340" SizeToContent="Height"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
+        FontFamily="Segoe UI" FontSize="13" Foreground="{StaticResource Fg}">
+  <Border Background="{StaticResource Bg}" CornerRadius="10" BorderBrush="#33FFFFFF" BorderThickness="1">
+    <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="16,16,16,10">
+
+        <!-- cover + track -->
+        <Border CornerRadius="6" Width="220" Height="220" Background="#282828" ClipToBounds="True">
+          <Grid>
+            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE8D6;" FontSize="64"
+                       Foreground="#555" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <Image x:Name="CoverImage" Stretch="UniformToFill"/>
+          </Grid>
+        </Border>
+
+        <DockPanel Margin="0,12,0,0">
+          <Button x:Name="LikeButton" DockPanel.Dock="Right" Style="{StaticResource IconButton}"
+                  Content="&#xEB51;" ToolTip="Me gusta" Click="Like_Click" Visibility="Collapsed"/>
+          <StackPanel>
+            <TextBlock x:Name="TitleText" FontWeight="Bold" FontSize="15" TextTrimming="CharacterEllipsis" Text="Spotify no está abierto"/>
+            <TextBlock x:Name="ArtistText" Foreground="{StaticResource Dim}" TextTrimming="CharacterEllipsis"/>
+            <TextBlock x:Name="AlbumText" Foreground="#888" FontSize="12" TextTrimming="CharacterEllipsis"/>
+          </StackPanel>
+        </DockPanel>
+
+        <!-- progress -->
+        <Slider x:Name="SeekSlider" Margin="0,10,0,0" Minimum="0" Maximum="1" IsMoveToPointEnabled="True"
+                PreviewMouseLeftButtonDown="Seek_Down" PreviewMouseLeftButtonUp="Seek_Up"/>
+        <DockPanel>
+          <TextBlock x:Name="LengthText" DockPanel.Dock="Right" Foreground="#888" FontSize="11" Text="0:00"/>
+          <TextBlock x:Name="PositionText" Foreground="#888" FontSize="11" Text="0:00"/>
+        </DockPanel>
+
+        <!-- transport -->
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
+          <Button x:Name="ShuffleButton" Style="{StaticResource IconButton}" Content="&#xE8B1;" ToolTip="Aleatorio" Click="Shuffle_Click" Margin="4,0"/>
+          <Button Style="{StaticResource IconButton}" Content="&#xE892;" ToolTip="Anterior" Click="Prev_Click" Margin="4,0"/>
+          <Button x:Name="PlayButton" Click="Play_Click" Margin="8,0" Width="48" Height="48" Cursor="Hand" ToolTip="Reproducir / pausar">
+            <Button.Template>
+              <ControlTemplate TargetType="Button">
+                <Border x:Name="b" Background="{StaticResource Green}" CornerRadius="24">
+                  <TextBlock x:Name="PlayGlyph" FontFamily="{StaticResource Icons}" FontSize="20" Foreground="Black"
+                             Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="b" Property="Background" Value="#1ED760"/>
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Button.Template>
+            <Button.Content>&#xE768;</Button.Content>
+          </Button>
+          <Button Style="{StaticResource IconButton}" Content="&#xE893;" ToolTip="Siguiente" Click="Next_Click" Margin="4,0"/>
+          <Button x:Name="RepeatButton" Style="{StaticResource IconButton}" Content="&#xE8EE;" ToolTip="Repetir" Click="Repeat_Click" Margin="4,0"/>
+        </StackPanel>
+
+        <!-- volume (Spotify's own, through the Web API) -->
+        <DockPanel x:Name="VolumeRow" Margin="0,8,0,0" Visibility="Collapsed">
+          <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource Icons}" Text="&#xE767;" VerticalAlignment="Center" Margin="4,0,10,0"/>
+          <Slider x:Name="VolumeSlider" Minimum="0" Maximum="100" IsMoveToPointEnabled="True"
+                  PreviewMouseLeftButtonUp="Volume_Up" VerticalAlignment="Center"/>
+        </DockPanel>
+
+        <Separator Margin="0,10" Background="#333"/>
+
+        <!-- account / lists -->
+        <Button x:Name="ConnectButton" Style="{StaticResource RowButton}" Click="Connect_Click" Visibility="Collapsed">
+          <TextBlock x:Name="ConnectText" Text="Conectar cuenta de Spotify…" TextWrapping="Wrap"/>
+        </Button>
+
+        <ToggleButton x:Name="PlayListsHeader" Style="{StaticResource Header}" Content="Reproducir lista" Visibility="Collapsed"/>
+        <StackPanel x:Name="PlayListsPanel" Visibility="{Binding IsChecked, ElementName=PlayListsHeader, Converter={StaticResource BoolToVis}}"/>
+
+        <ToggleButton x:Name="AddListsHeader" Style="{StaticResource Header}" Content="Añadir a listas" Visibility="Collapsed"
+                      Checked="AddLists_Checked"/>
+        <StackPanel x:Name="AddListsPanel" Visibility="{Binding IsChecked, ElementName=AddListsHeader, Converter={StaticResource BoolToVis}}"/>
+
+        <TextBlock x:Name="StatusText" Foreground="{StaticResource Dim}" FontSize="12" Margin="8,4" TextWrapping="Wrap" Visibility="Collapsed"/>
+
+        <Separator Margin="0,10" Background="#333"/>
+
+        <!-- search -->
+        <Grid>
+          <TextBox x:Name="SearchBox" KeyDown="Search_KeyDown" TextChanged="Search_TextChanged"/>
+          <TextBlock x:Name="SearchHint" Text="Buscar o pegar enlace de Spotify…" Foreground="#777" Margin="10,6" IsHitTestVisible="False"/>
+        </Grid>
+        <StackPanel x:Name="ResultsPanel" Margin="0,4,0,0"/>
+
+        <!-- settings -->
+        <StackPanel x:Name="SettingsPanel" Visibility="Collapsed" Margin="0,10,0,0">
+          <TextBlock Text="Client ID de tu app de Spotify" Foreground="{StaticResource Dim}" Margin="0,0,0,4"/>
+          <TextBox x:Name="ClientIdBox" LostFocus="ClientId_LostFocus"/>
+          <TextBlock Foreground="#777" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
+                     Text="Créala en developer.spotify.com/dashboard con Redirect URI http://127.0.0.1:8898/callback"/>
+          <CheckBox x:Name="StartupCheck" Content="Iniciar con Windows" Margin="0,10,0,0" Click="Startup_Click"/>
+          <Button Style="{StaticResource RowButton}" Click="Logout_Click" Margin="0,6,0,0">
+            <TextBlock Text="Desconectar cuenta"/>
+          </Button>
+        </StackPanel>
+
+        <!-- bottom bar -->
+        <DockPanel Margin="0,10,0,0">
+          <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Ajustes" Click="Settings_Click"/>
+          <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE71B;" ToolTip="Copiar enlace de la canción" Click="Copy_Click"/>
+          <Button Style="{StaticResource RowButton}" Click="Show_Click" HorizontalAlignment="Left">
+            <TextBlock x:Name="ShowText" Text="Abrir Spotify"/>
+          </Button>
+        </DockPanel>
+      </StackPanel>
+    </ScrollViewer>
+  </Border>
+</Window>
